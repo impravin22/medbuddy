@@ -1,47 +1,36 @@
-"""Voice service — Google Cloud STT v2 (Chirp 3) + Google Cloud TTS (Chirp 3 HD).
+"""Voice service — Gemini multimodal STT + edge-tts for TTS.
 
-STT: Transcribes Mandarin audio from LINE voice messages.
-TTS: Generates warm zh-TW audio for medication explanations.
+STT: Gemini 2.5 Flash transcribes Mandarin audio natively (multimodal input).
+TTS: edge-tts with zh-TW-HsiaoChenNeural voice (free, no API key required).
 
-Uses existing GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS from .env.
+No GCP Speech/TTS APIs needed — works with just a Gemini API key.
 """
 
 import logging
 import subprocess
+import tempfile
 
-from google.cloud.speech_v2 import SpeechAsyncClient
-from google.cloud.speech_v2.types import cloud_speech
-from google.cloud.texttospeech_v1 import TextToSpeechAsyncClient
-from google.cloud.texttospeech_v1.types import (
-    AudioConfig,
-    AudioEncoding,
-    SynthesisInput,
-    VoiceSelectionParams,
-)
+import edge_tts
+from google import genai
+from google.genai.types import Part
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Singleton clients — initialised once
-_stt_client: SpeechAsyncClient | None = None
-_tts_client: TextToSpeechAsyncClient | None = None
+# Singleton Gemini client
+_genai_client: genai.Client | None = None
+
+# edge-tts voice for Traditional Chinese (warm female voice)
+_TTS_VOICE = "zh-TW-HsiaoChenNeural"
 
 
-def _get_stt_client() -> SpeechAsyncClient:
-    """Get or create the STT async client singleton."""
-    global _stt_client
-    if _stt_client is None:
-        _stt_client = SpeechAsyncClient()
-    return _stt_client
-
-
-def _get_tts_client() -> TextToSpeechAsyncClient:
-    """Get or create the TTS async client singleton."""
-    global _tts_client
-    if _tts_client is None:
-        _tts_client = TextToSpeechAsyncClient()
-    return _tts_client
+def _get_genai_client() -> genai.Client:
+    """Get or create the Gemini client singleton."""
+    global _genai_client
+    if _genai_client is None:
+        _genai_client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+    return _genai_client
 
 
 def convert_audio_to_wav(audio_bytes: bytes) -> bytes:
@@ -83,48 +72,55 @@ def convert_audio_to_wav(audio_bytes: bytes) -> bytes:
 
 
 async def transcribe_audio(audio_bytes: bytes, convert_from_m4a: bool = True) -> str:
-    """Transcribe audio bytes to Traditional Chinese text using Chirp 3.
+    """Transcribe audio bytes to Traditional Chinese text using Gemini multimodal.
+
+    Gemini 2.5 Flash handles audio input natively — no separate STT API needed.
 
     Args:
         audio_bytes: Raw audio bytes (M4A from LINE or WAV).
-        convert_from_m4a: If True, convert from M4A to WAV first.
+        convert_from_m4a: If True, convert from M4A to WAV first for better accuracy.
 
     Returns:
         Transcribed text string.
-
-    Raises:
-        Exception: If transcription fails.
     """
+    # Convert to WAV for consistent audio format
     if convert_from_m4a:
         try:
             audio_bytes = convert_audio_to_wav(audio_bytes)
+            mime_type = "audio/wav"
         except RuntimeError:
-            logger.warning("Audio conversion failed, trying raw audio with auto-detect")
-            # Fall through to try auto-detect with raw audio
+            logger.warning("Audio conversion failed, sending raw audio to Gemini")
+            mime_type = "audio/m4a"
+    else:
+        mime_type = "audio/wav"
 
-    client = _get_stt_client()
+    client = _get_genai_client()
 
-    config = cloud_speech.RecognitionConfig(
-        auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-        language_codes=["cmn-Hant-TW"],
-        model="chirp_3",
+    audio_part = Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+
+    response = client.models.generate_content(
+        model=settings.GOOGLE_AI_FAST_MODEL,
+        contents=[
+            audio_part,
+            (
+                "Transcribe this audio exactly. "
+                "Output only the transcription in Traditional Chinese (繁體中文). "
+                "Do not add any explanation, translation, or punctuation that is not spoken. "
+                "If the audio contains English words (like drug names), keep them as-is."
+            ),
+        ],
     )
 
-    request = cloud_speech.RecognizeRequest(
-        recognizer=f"projects/{settings.GOOGLE_CLOUD_PROJECT}/locations/global/recognizers/_",
-        config=config,
-        content=audio_bytes,
-    )
-
-    response = await client.recognize(request=request)
-
-    return "".join(r.alternatives[0].transcript for r in response.results if r.alternatives)
+    transcript = response.text.strip() if response.text else ""
+    logger.info("Gemini STT transcription: %s", transcript[:50])
+    return transcript
 
 
 async def synthesise_speech(text: str) -> bytes:
-    """Convert text to speech in Traditional Chinese using Chirp 3 HD.
+    """Convert text to speech in Traditional Chinese using edge-tts.
 
-    Uses a warm zh-TW voice with slightly slower pacing for elderly users.
+    Uses zh-TW-HsiaoChenNeural — a warm, natural female voice.
+    Free, no API key required.
 
     Args:
         text: Text to synthesise in Traditional Chinese.
@@ -132,28 +128,18 @@ async def synthesise_speech(text: str) -> bytes:
     Returns:
         Audio bytes in MP3 format (LINE-compatible).
     """
-    client = _get_tts_client()
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        tmp_path = tmp.name
 
-    # Use SSML for pacing control — slightly slower for elderly users
-    ssml = f'<speak><prosody rate="slow">{text}</prosody></speak>'
+    communicate = edge_tts.Communicate(text, _TTS_VOICE, rate="-10%")
+    await communicate.save(tmp_path)
 
-    synthesis_input = SynthesisInput(ssml=ssml)
+    with open(tmp_path, "rb") as f:
+        audio_bytes = f.read()
 
-    voice = VoiceSelectionParams(
-        language_code="cmn-TW",
-        name="cmn-TW-Standard-A",  # Standard voice; upgrade to Chirp 3 HD when available in region
-    )
+    import os
 
-    audio_config = AudioConfig(
-        audio_encoding=AudioEncoding.MP3,
-        speaking_rate=0.9,  # Slightly slower
-        pitch=0.0,
-    )
+    os.unlink(tmp_path)
 
-    response = await client.synthesize_speech(
-        input=synthesis_input,
-        voice=voice,
-        audio_config=audio_config,
-    )
-
-    return response.audio_content
+    logger.info("edge-tts generated %d bytes for: %s", len(audio_bytes), text[:30])
+    return audio_bytes

@@ -1,8 +1,7 @@
-"""Tests for voice service — Google Cloud STT v2 + TTS."""
+"""Tests for voice service — Gemini multimodal STT + edge-tts TTS."""
 
-# Check if ffmpeg is available
 import shutil
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,7 +16,6 @@ class TestConvertAudioToWav:
     @pytest.mark.skipif(not _has_ffmpeg, reason="ffmpeg not installed")
     def test_valid_wav_passthrough(self) -> None:
         """WAV content can be processed (ffmpeg handles it)."""
-        # Create a minimal WAV header (44 bytes) + 1 second of silence
         wav_header = (
             b"RIFF"
             + (36 + 16000 * 2).to_bytes(4, "little")
@@ -36,7 +34,6 @@ class TestConvertAudioToWav:
         wav_data = wav_header + b"\x00" * (16000 * 2)
 
         result = convert_audio_to_wav(wav_data)
-        # Should produce valid WAV output
         assert result[:4] == b"RIFF"
 
     @pytest.mark.skipif(not _has_ffmpeg, reason="ffmpeg not installed")
@@ -47,68 +44,49 @@ class TestConvertAudioToWav:
 
 
 class TestTranscribeAudio:
-    """Test STT transcription."""
+    """Test Gemini multimodal STT transcription."""
 
     @pytest.mark.asyncio
     async def test_transcribes_audio_bytes(self) -> None:
-        """Transcribes audio bytes and returns text."""
-        mock_result = MagicMock()
-        mock_alternative = MagicMock()
-        mock_alternative.transcript = "我要問藥的問題"
-        mock_result.alternatives = [mock_alternative]
-
+        """Transcribes audio bytes via Gemini and returns text."""
         mock_response = MagicMock()
-        mock_response.results = [mock_result]
+        mock_response.text = "我要問藥的問題"
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content = MagicMock(return_value=mock_response)
 
         with (
-            patch("app.services.voice_service._get_stt_client") as mock_client_fn,
-            patch(
-                "app.services.voice_service.convert_audio_to_wav",
-                return_value=b"wav-bytes",
-            ),
+            patch("app.services.voice_service._get_genai_client", return_value=mock_client),
+            patch("app.services.voice_service.convert_audio_to_wav", return_value=b"wav-bytes"),
         ):
-            mock_client = AsyncMock()
-            mock_client.recognize = AsyncMock(return_value=mock_response)
-            mock_client_fn.return_value = mock_client
-
             result = await transcribe_audio(b"audio-bytes")
             assert result == "我要問藥的問題"
+            mock_client.models.generate_content.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_empty_results_returns_empty_string(self) -> None:
-        """No transcription results returns empty string."""
+    async def test_empty_response_returns_empty_string(self) -> None:
+        """Empty Gemini response returns empty string."""
         mock_response = MagicMock()
-        mock_response.results = []
+        mock_response.text = ""
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content = MagicMock(return_value=mock_response)
 
         with (
-            patch("app.services.voice_service._get_stt_client") as mock_client_fn,
-            patch(
-                "app.services.voice_service.convert_audio_to_wav",
-                return_value=b"wav-bytes",
-            ),
+            patch("app.services.voice_service._get_genai_client", return_value=mock_client),
+            patch("app.services.voice_service.convert_audio_to_wav", return_value=b"wav-bytes"),
         ):
-            mock_client = AsyncMock()
-            mock_client.recognize = AsyncMock(return_value=mock_response)
-            mock_client_fn.return_value = mock_client
-
             result = await transcribe_audio(b"audio-bytes")
             assert result == ""
 
 
 class TestSynthesiseSpeech:
-    """Test TTS synthesis."""
+    """Test edge-tts synthesis."""
 
     @pytest.mark.asyncio
     async def test_generates_audio_bytes(self) -> None:
-        """Generates MP3 audio bytes from text."""
-        mock_response = MagicMock()
-        mock_response.audio_content = b"fake-mp3-audio"
-
-        with patch("app.services.voice_service._get_tts_client") as mock_client_fn:
-            mock_client = AsyncMock()
-            mock_client.synthesize_speech = AsyncMock(return_value=mock_response)
-            mock_client_fn.return_value = mock_client
-
-            result = await synthesise_speech("您好，這是測試。")
-            assert result == b"fake-mp3-audio"
-            mock_client.synthesize_speech.assert_called_once()
+        """Generates MP3 audio bytes from text using edge-tts."""
+        result = await synthesise_speech("測試")
+        assert len(result) > 0
+        # MP3 files start with ID3 tag or 0xFF sync byte
+        assert result[:3] == b"ID3" or result[0] == 0xFF
