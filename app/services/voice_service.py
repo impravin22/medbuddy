@@ -141,7 +141,7 @@ async def synthesise_speech(text: str) -> bytes:
 
     voice = VoiceSelectionParams(
         language_code="cmn-TW",
-        name="cmn-TW-Wavenet-A",  # Warm female voice
+        name="cmn-TW-Standard-A",  # Standard voice; upgrade to Chirp 3 HD when available in region
     )
 
     audio_config = AudioConfig(
