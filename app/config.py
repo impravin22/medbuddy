@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     # --- OpenAI (Whisper STT fallback) ---
     OPENAI_API_KEY: str = ""
 
-    # --- Google Cloud (STT v2 + TTS) ---
-    GOOGLE_CLOUD_PROJECT: str
+    # --- Google Cloud (optional, not used in current stack) ---
+    GOOGLE_CLOUD_PROJECT: str = ""
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
 
     # --- Encryption ---
