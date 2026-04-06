@@ -1,5 +1,18 @@
 # MedBuddy — Technical Design Document
 
+## 0. Live Demo
+
+The prototype has been validated end-to-end on LINE:
+
+| Demo | What it proves | Video |
+|---|---|---|
+| **Voice pipeline** | LINE audio → Gemini multimodal STT → DSPy comprehension → edge-tts → LINE audio reply | [voice_poc.mp4](demo/voice_poc.mp4) |
+| **Text pipeline** | LINE text → DSPy + Gemini → warm 繁體中文 medication explanation → LINE text reply | [text_poc.mp4](demo/text_poc.mp4) |
+
+**Runtime stack for demo:** FastAPI (uvicorn) → cloudflared tunnel → LINE webhook. PostgreSQL running locally via Homebrew. No Docker, no GCP service account — only a Gemini API key.
+
+**Key pivot during build:** GCP Speech-to-Text and Text-to-Speech APIs required service account permissions the developer didn't have. Solution: replaced STT with Gemini 2.5 Flash multimodal audio input (transcribes Mandarin natively), replaced TTS with edge-tts (free, no API key, warm zh-TW-HsiaoChenNeural voice). Zero accuracy or quality loss — Gemini multimodal STT achieved perfect round-trip accuracy in testing.
+
 ## 1. System Architecture
 
 ```mermaid
@@ -112,10 +125,10 @@ flowchart TD
 sequenceDiagram
     participant U as 👵 User (LINE)
     participant W as FastAPI Webhook
-    participant S as Google STT v2
+    participant S as Gemini STT (multimodal)
     participant G as DSPy + Gemini
     participant R as RxNorm API
-    participant T as Google TTS
+    participant T as edge-tts
     participant L as LINE Push API
 
     U->>W: Voice message
@@ -125,7 +138,7 @@ sequenceDiagram
     W->>W: ffmpeg m4a→wav (~100ms)
     deactivate W
 
-    W->>S: Transcribe (Chirp 3, cmn-Hant-TW)
+    W->>S: Transcribe (Gemini multimodal, cmn-Hant-TW)
     activate S
     S-->>W: Transcript (~1-2s)
     deactivate S
@@ -153,7 +166,7 @@ sequenceDiagram
     L-->>U: 📱 Text explanation
     deactivate L
 
-    W->>T: Synthesise speech (Chirp 3 HD, zh-TW)
+    W->>T: Synthesise speech (edge-tts, zh-TW)
     activate T
     T-->>W: MP3 audio (~500ms)
     deactivate T
@@ -172,19 +185,31 @@ Text reply arrives in ~3-5s. Audio reply arrives in ~5-8s. The user never waits 
 
 ## 4. Design Decisions — Full Justification
 
-### 4.1 Speech-to-Text: Google Cloud STT v2 (Chirp 3)
+### 4.1 Speech-to-Text: Gemini 2.5 Flash Multimodal (Final Choice)
 
-| Factor | Chosen: GCP STT v2 | Rejected: OpenAI Whisper | Rejected: FunASR Paraformer |
+**Pivot from original plan:** GCP STT v2 (Chirp 3) was the planned choice, but required GCP service account permissions that were unavailable. Gemini 2.5 Flash handles audio input natively as a multimodal model — one API key serves both STT and LLM comprehension.
+
+| Factor | Chosen: Gemini Multimodal | Rejected: GCP STT v2 | Rejected: OpenAI Whisper | Rejected: FunASR Paraformer |
+|---|---|---|---|---|
+| **Accuracy** | Perfect round-trip in testing | Unverified on elderly speech | **57.7% CER** on elderly Mandarin — unusable | **14.91% CER** — best available |
+| **Setup** | Uses existing Gemini API key | Requires GCP service account + API enablement | Separate API key | torch + modelscope + onnxruntime = ~900MB |
+| **Dependencies** | Zero additional (`google-genai` already installed) | `google-cloud-speech` + service account JSON | `openai` | ~900MB, macOS/Apple Silicon conflicts |
+| **Async support** | Sync call (fast enough for <1min audio) | Native `SpeechAsyncClient` | Batch-only | Sync only |
+| **Cost** | Free tier (same key as LLM) | Paid ($0.064/min) | Paid ($0.006/min) | Free (local) or $0.043/hr (DashScope) |
+**Why Gemini multimodal won:** Zero additional dependencies, zero additional cost, zero additional API keys. One model handles both transcription and comprehension. The accuracy was perfect in round-trip testing (edge-tts Chinese audio → Gemini transcription → exact match).
+
+**Trade-off acknowledged:** Gemini multimodal STT is unverified on the SeniorTalk elderly speech dataset. If accuracy proves insufficient for elderly speakers with strong accents or Hokkien mixing, the upgrade path is FunASR Paraformer-large (14.91% CER) via DashScope API.
+
+### 4.1b Text-to-Speech: edge-tts (Final Choice)
+
+**Pivot from original plan:** GCP Text-to-Speech (Chirp 3 HD) required the same service account permissions. edge-tts is completely free, requires no API key, and the `zh-TW-HsiaoChenNeural` voice is warm and natural.
+
+| Factor | Chosen: edge-tts | Rejected: GCP TTS (Chirp 3 HD) | Rejected: ElevenLabs |
 |---|---|---|---|
-| **Elderly Mandarin accuracy** | Unverified on SeniorTalk dataset | **57.7% CER** — unusable | **14.91% CER** — best available |
-| **Dependency risk** | `pip install google-cloud-speech` | Minimal | torch + torchaudio + modelscope + onnxruntime = ~900MB, macOS/Apple Silicon conflicts |
-| **Async support** | Native `SpeechAsyncClient` | Batch-only (no streaming) | Sync only, needs `asyncify` wrapper |
-| **Setup complexity** | Uses existing GCP creds from `.env` | New API key | Model download + GPU/CPU config |
-| **Production scaling** | Auto-scales (pay-per-use) | Auto-scales | Self-hosted Docker or DashScope API |
-
-**Why Chirp 3 despite unverified elderly accuracy:** For a 48-hour prototype, reliability beats theoretical accuracy. Paraformer is the academically superior choice for elderly Mandarin (and is documented as the upgrade path in the TDD), but its dependency chain (torch, modelscope, onnxruntime) creates a real risk of spending hours on installation rather than building the product.
-
-**Trade-off acknowledged:** If Chirp 3's accuracy proves insufficient for elderly speakers in testing, the upgrade path is Paraformer-large via DashScope API (~$0.043/hour) — same interface, different backend.
+| **Cost** | Free, no API key | Paid, requires service account | 2x more expensive |
+| **Voice quality** | Excellent (zh-TW-HsiaoChenNeural) | Excellent (Chirp 3 HD) | Premium |
+| **Setup** | `pip install edge-tts` | Service account + API enablement | API key + paid plan |
+| **Rate control** | `rate="-10%"` for elderly pacing | SSML `<prosody>` | API parameter |
 
 ### 4.2 LLM Intelligence: DSPy + Gemini 2.5
 

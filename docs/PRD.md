@@ -108,3 +108,12 @@ graph LR
 ## 6. Success Criteria
 
 An evaluator can open LINE, send a voice message in Mandarin asking about a medication, and receive a warm, accurate, spoken + text explanation — **within 10 seconds, with zero app installation.**
+
+## 7. Live Demo
+
+| Demo | Description | Video |
+|---|---|---|
+| **Voice Input** | User sends Mandarin voice message → Gemini STT transcription → DSPy comprehension → text + audio reply | [voice_poc.mp4](demo/voice_poc.mp4) |
+| **Text Input** | User types "Metformin 是什麼藥？" → warm explanation in 繁體中文 → defers to doctor | [text_poc.mp4](demo/text_poc.mp4) |
+
+Both demos recorded live on LINE with the prototype running locally (FastAPI + cloudflared tunnel).

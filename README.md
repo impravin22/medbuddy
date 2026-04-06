@@ -11,6 +11,18 @@ MedBuddy responds with a warm, spoken + text explanation in plain 繁體中文, 
 
 ---
 
+## Live Demo
+
+> **Demo videos:** [`docs/demo/`](docs/demo/) — recorded live on LINE with the prototype running locally via cloudflared tunnel.
+
+### Voice Input → Mandarin Comprehension
+[`voice_poc.mp4`](docs/demo/voice_poc.mp4) — User sends a voice message in Mandarin asking about a medication. MedBuddy transcribes via Gemini multimodal STT, generates a warm explanation via DSPy + Gemini, and replies with both text and spoken audio (edge-tts).
+
+### Text Input → Medication Explanation
+[`text_poc.mp4`](docs/demo/text_poc.mp4) — User types "Metformin 是什麼藥？" — MedBuddy explains the drug's purpose, timing, and key warnings in plain 繁體中文 at a primary-school reading level, then defers to the user's doctor.
+
+---
+
 ## Architecture
 
 ```mermaid

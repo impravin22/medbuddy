@@ -92,14 +92,23 @@ async def handle_message_event(
     if not transcript:
         return
 
-    # Load user's medication context from DB
+    # Load user's medication context from DB (async-safe eager load)
+    from sqlalchemy import select as sa_select
+
+    from app.models.medication import Medication
+
     medication_names = []
-    if user.medications:
+    med_result = await session.execute(
+        sa_select(Medication).where(
+            Medication.user_id == user.id,
+            Medication.is_active.is_(True),
+        )
+    )
+    active_meds = med_result.scalars().all()
+    if active_meds:
         from app.services.encryption import decrypt
 
-        medication_names = [
-            decrypt(med.drug_name_en_encrypted) for med in user.medications if med.is_active
-        ]
+        medication_names = [decrypt(med.drug_name_en_encrypted) for med in active_meds]
 
     # Run LangGraph pipeline
     try:
