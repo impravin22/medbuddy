@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: medbuddy-postgres
+    environment:
+      POSTGRES_USER: medbuddy
+      POSTGRES_PASSWORD: medbuddy
+      POSTGRES_DB: medbuddy
+    ports:
+      - "5432:5432"
+    volumes:
+      - medbuddy_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medbuddy"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  medbuddy_pgdata:
