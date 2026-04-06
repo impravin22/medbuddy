@@ -57,13 +57,12 @@ async def route_input_node(state: MedBuddyState) -> dict:
 
 
 async def stt_node(state: MedBuddyState) -> dict:
-    """Transcribe audio to text using Google Cloud STT v2 (Chirp 3).
+    """Validate transcript from Gemini multimodal STT.
 
-    This node is a placeholder — actual STT integration is in voice_service.py.
-    The voice_service transcribes and sets the transcript before the pipeline runs.
+    Actual transcription happens in message_handler before pipeline entry
+    (voice_service.transcribe_audio via Gemini 2.5 Flash multimodal).
+    This node validates the transcript and routes errors.
     """
-    # Audio is transcribed before pipeline entry (in the webhook handler)
-    # This node exists for graph completeness and future streaming support
     transcript = state.get("transcript", "")
     if not transcript:
         return {
@@ -132,7 +131,18 @@ async def drug_lookup_node(state: MedBuddyState) -> dict:
         if existing_drug.lower() == mentioned_drug.lower():
             continue
         interaction_data = await drug_service.check_drug_interaction(mentioned_drug, existing_drug)
-        if '"interactions": []' not in interaction_data:
+        # Parse JSON to check for actual interactions (not brittle string matching)
+        import json
+
+        try:
+            parsed = json.loads(interaction_data)
+            has_interactions = bool(parsed.get("fullInteractionTypeGroup")) or (
+                isinstance(parsed.get("interactions"), list) and len(parsed["interactions"]) > 0
+            )
+        except (json.JSONDecodeError, TypeError):
+            has_interactions = False
+
+        if has_interactions:
             interactions_found.append(
                 {
                     "drug_a": mentioned_drug,
@@ -169,12 +179,11 @@ async def drug_lookup_node(state: MedBuddyState) -> dict:
 
 
 async def tts_node(state: MedBuddyState) -> dict:
-    """Generate TTS audio from the explanation text.
+    """Mark pipeline ready for TTS generation.
 
-    Placeholder — actual TTS is handled by voice_service.py after pipeline completion.
+    Actual TTS (edge-tts, zh-TW-HsiaoChenNeural) runs after pipeline completes
+    in message_handler — text reply goes out first, audio follows.
     """
-    # TTS is generated after pipeline completes (in the webhook handler)
-    # to keep the pipeline fast and allow text reply to go out immediately
     return {"stage": "reply"}
 
 

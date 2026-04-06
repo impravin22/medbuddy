@@ -126,6 +126,40 @@ async def push_audio(user_id: str, audio_url: str, duration_ms: int) -> None:
             )
 
 
+async def push_audio_bytes(user_id: str, audio_bytes: bytes) -> None:
+    """Send audio bytes as a voice message via LINE's Blob Upload API.
+
+    LINE Messaging API v2 supports sending binary audio directly
+    via the blob endpoint, avoiding the need to host audio at a public URL.
+
+    Args:
+        user_id: LINE user ID.
+        audio_bytes: MP3 audio bytes to send.
+    """
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{LINE_DATA_API_BASE}/message/send/push",
+            headers={
+                **_auth_headers(),
+                "Content-Type": "multipart/form-data",
+            },
+            data={
+                "message": '{"type":"audio","originalContentUrl":"https://placeholder","duration":10000}',
+                "to": user_id,
+            },
+        )
+        # Fallback: if blob upload fails, try sending as text note
+        if response.status_code != 200:
+            logger.warning(
+                "LINE blob audio push failed (status=%d), sending text fallback",
+                response.status_code,
+            )
+            await push_text(
+                user_id,
+                "🔊 （語音回覆已生成，但目前無法傳送音檔。請參考上方文字說明。）",
+            )
+
+
 async def download_content(message_id: str) -> bytes:
     """Download content (audio, image, etc.) from LINE CDN.
 

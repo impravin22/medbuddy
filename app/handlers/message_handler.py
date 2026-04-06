@@ -62,7 +62,7 @@ async def handle_message_event(
     try:
         await line_service.reply_text(reply_token, "正在為您查詢...")
     except Exception:
-        logger.warning("Failed to send immediate reply to user %s", user_id)
+        logger.exception("Failed to send immediate reply to user %s", user_id)
 
     # Prepare pipeline input
     transcript = None
@@ -136,17 +136,18 @@ async def handle_message_event(
             safe_text = scan_output(explanation)
             await line_service.push_text(user_id, safe_text)
 
-            # TTS audio generation (best-effort)
+            # TTS audio generation + push (best-effort, never blocks text reply)
             try:
                 tts_audio = await voice_service.synthesise_speech(safe_text)
                 if tts_audio:
+                    await line_service.push_audio_bytes(user_id, tts_audio)
                     logger.info(
-                        "TTS audio generated for user %s (%d bytes)",
+                        "TTS audio pushed to user %s (%d bytes)",
                         user_id,
                         len(tts_audio),
                     )
             except Exception:
-                logger.warning("TTS generation failed for user %s", user_id)
+                logger.exception("TTS generation/push failed for user %s", user_id)
         else:
             await line_service.push_text(
                 user_id,

@@ -47,7 +47,7 @@ async def send_daily_checkin() -> None:
             await line_service.push_text(user_id, message)
             logger.info("Daily check-in sent to user: %s", user_id)
         except Exception:
-            logger.warning("Failed to send check-in to user: %s", user_id)
+            logger.exception("Failed to send check-in to user: %s", user_id)
 
 
 def start_scheduler() -> None:

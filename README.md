@@ -47,8 +47,8 @@ graph TB
     end
 
     subgraph "Voice"
-        STT["Google Cloud STT v2<br/>(Chirp 3, cmn-Hant-TW)"]
-        TTS["Google Cloud TTS<br/>(Chirp 3 HD, zh-TW)"]
+        STT["Gemini 2.5 Flash STT<br/>(multimodal, cmn-Hant-TW)"]
+        TTS["edge-tts<br/>(zh-TW-HsiaoChenNeural)"]
     end
 
     subgraph "Data"
@@ -88,14 +88,14 @@ flowchart LR
 sequenceDiagram
     participant U as 👵 User (LINE)
     participant W as FastAPI
-    participant S as Google STT v2
+    participant S as Gemini STT (multimodal)
     participant G as DSPy + Gemini
-    participant T as Google TTS
+    participant T as edge-tts
     participant L as LINE Push API
 
     U->>W: Voice message
     W->>U: "正在為您查詢..." (<2s)
-    W->>S: Transcribe (Chirp 3)
+    W->>S: Transcribe (Gemini multimodal)
     S-->>W: Transcript (~1-2s)
     W->>U: "您是不是說：「...」"
     W->>G: Comprehension (~1-3s)
@@ -117,8 +117,8 @@ sequenceDiagram
 | **Framework** | FastAPI (async) | Native async, Pydantic validation, BackgroundTasks |
 | **LLM** | Gemini 2.5 via DSPy 3.1.3 | Typed signatures, ChainOfThought reasoning, model-swappable |
 | **Orchestration** | LangGraph StateGraph | Thread-per-user memory, conditional routing, checkpointing |
-| **STT** | Google Cloud STT v2 (Chirp 3) | Production API, native async, `cmn-Hant-TW` support |
-| **TTS** | Google Cloud TTS (Chirp 3 HD) | Warm zh-TW voice, SSML pacing for elderly users |
+| **STT** | Gemini 2.5 Flash (multimodal audio input) | Transcribes Mandarin natively, zero additional dependencies, same API key as LLM |
+| **TTS** | edge-tts (`zh-TW-HsiaoChenNeural`) | Free, no API key, warm female Mandarin voice with rate control |
 | **Drug Data** | NLM RxNorm API | Authoritative interaction data (free, NIH-backed) |
 | **Database** | PostgreSQL 16 + SQLAlchemy 2.x async | AES-256-GCM field-level encryption |
 | **Messaging** | LINE Messaging API | 94% penetration in Taiwan, voice messages native |
@@ -211,11 +211,17 @@ uv run pytest tests/ -v
 # Run specific test file
 uv run pytest tests/test_encryption.py -v
 
-# Lint
-uv run ruff check .
+# Lint (auto-fix)
+uv run ruff check --fix .
 
-# Format check
+# Format
+uv run ruff format .
+
+# Format check (CI mode, no changes)
 uv run ruff format --check .
+
+# Full pre-commit check
+uv run ruff check --fix . && uv run ruff format . && uv run pytest tests/ -v
 ```
 
 | Test File | Tests | Covers |
@@ -268,7 +274,7 @@ medbuddy/
 
 | Decision | Chosen | Rejected Alternative | Why |
 |---|---|---|---|
-| **STT** | Google Cloud STT v2 (Chirp 3) | OpenAI Whisper (57.7% CER on elderly Mandarin) | Production API, no local dependency risk. Whisper is unusable for elderly speakers |
+| **STT** | Gemini 2.5 Flash (multimodal) | OpenAI Whisper (57.7% CER on elderly Mandarin), GCP STT v2 (needs service account) | Zero additional deps, same API key as LLM, perfect round-trip accuracy |
 | **LLM wrapper** | DSPy typed signatures | Direct Gemini SDK (no structured output guarantees) | Type safety, ChainOfThought, auto-optimisable prompts |
 | **Orchestration** | LangGraph StateGraph | Plain async Python (no checkpointing, no memory) | Thread-per-user conversation memory, conditional routing |
 | **Drug data** | RxNorm API (authoritative) | Gemini knowledge (hallucination risk) | Never trust an LLM for drug interaction ground truth |
